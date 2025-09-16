@@ -1,0 +1,32 @@
+version: "3.9"
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: -jar DynamoDBLocal.jar -sharedDb
+    ports:
+      - "8000:8000"
+
+  backend:
+    build: ./backend
+    environment:
+      PORT: "5001"
+      AWS_REGION: "us-east-1"
+      TABLE_NAME: "tb_books"
+      DYNAMODB_ENDPOINT: "http://dynamodb:8000"
+      AWS_ACCESS_KEY_ID: "dummy"
+      AWS_SECRET_ACCESS_KEY: "dummy"
+    depends_on:
+      - dynamodb
+    ports:
+      - "5001:5001"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+networks:
+  default:
+    name: bookstore
