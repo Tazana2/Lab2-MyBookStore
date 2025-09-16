@@ -17,15 +17,13 @@ services:
       AWS_SECRET_ACCESS_KEY: "dummy"
     depends_on:
       - dynamodb
-    ports:
-      - "5001:5001"
 
   frontend:
     build: ./frontend
     depends_on:
       - backend
     ports:
-      - "8080:80"
+      - "80:80"
 
 networks:
   default:

@@ -8,7 +8,8 @@ export default function Home() {
 
   useEffect(() => {
     setLoading(true);
-    fetch('http://localhost:5001/api/books')
+    const base = import.meta.env.VITE_API_BASE_URL || '';
+    fetch(`${base}/api/books`)
       .then(async (res) => {
         if (!res.ok) {
           const text = await res.text();

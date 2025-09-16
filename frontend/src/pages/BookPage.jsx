@@ -10,7 +10,8 @@ export default function BookDetail() {
   useEffect(() => {
     if (!id) return;
     setLoading(true);
-    fetch(`http://localhost:5001/api/books/${encodeURIComponent(id)}`)
+  const base = import.meta.env.VITE_API_BASE_URL || '';
+    fetch(`${base}/api/books/${encodeURIComponent(id)}`)
       .then(async (res) => {
         if (!res.ok) {
           const text = await res.text();
