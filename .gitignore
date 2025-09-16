@@ -1,0 +1,33 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log
+pnpm-lock.yaml
+
+# Env / secrets
+.env
+.env.*.local
+.env.local
+.aws/
+*.pem
+*.key
+
+# Build / dist
+dist/
+build/
+out/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs / coverage
+logs/
+*.log
+coverage/
+
+# Docker
+docker-compose.override.yml
+*.sqlite
