@@ -1,20 +1,11 @@
 // scripts/seed.js
 import dotenv from "dotenv";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand } from "@aws-sdk/lib-dynamodb";
+import ddb from "../src/config/dbClient.js";
 
 dotenv.config();
 
 const TABLE = process.env.TABLE_NAME || "tb_books";
-
-const clientConfig = {
-  region: process.env.AWS_REGION || "us-east-1",
-};
-if (process.env.DYNAMODB_ENDPOINT)
-  clientConfig.endpoint = process.env.DYNAMODB_ENDPOINT;
-
-const client = new DynamoDBClient(clientConfig);
-const ddb = DynamoDBDocumentClient.from(client);
 
 const sampleBooks = [
   {
@@ -66,14 +57,18 @@ async function seed() {
     );
     for (const item of sampleBooks) {
       try {
-        await ddb.send(new PutCommand({ TableName: TABLE, Item: item }));
+        await ddb.send(new PutCommand({
+          TableName: TABLE,
+            Item: item,
+            ConditionExpression: "attribute_not_exists(id)"
+        }));
         console.log(`  -> Insertado id=${item.id} title="${item.title}"`);
       } catch (err) {
-        // Error por item individual: lo logueamos y seguimos
-        console.error(
-          `  ! Error insertando id=${item.id}:`,
-          err.message || err
-        );
+        if (err.name === "ConditionalCheckFailedException") {
+          console.log(`  -> Ya existía id=${item.id}, omitido.`);
+        } else {
+          console.error(`  ! Error insertando id=${item.id}:`, err.message || err);
+        }
       }
     }
     console.log("Seed finalizado.");
