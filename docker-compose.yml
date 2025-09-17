@@ -1,29 +1,31 @@
 version: "3.9"
 services:
-  dynamodb:
-    image: amazon/dynamodb-local:latest
-    command: -jar DynamoDBLocal.jar -sharedDb
-    ports:
-      - "8000:8000"
-
   backend:
     build: ./backend
     environment:
       PORT: "5001"
       AWS_REGION: "us-east-1"
       TABLE_NAME: "tb_books"
-      DYNAMODB_ENDPOINT: "http://dynamodb:8000"
-      AWS_ACCESS_KEY_ID: "dummy"
-      AWS_SECRET_ACCESS_KEY: "dummy"
-    depends_on:
-      - dynamodb
+      # Para usar DynamoDB Local en desarrollo, descomenta y levanta un servicio dynamodb abajo:
+      # DYNAMODB_ENDPOINT: "http://dynamodb:8000"
+    ports:
+      - "5001:5001"
 
   frontend:
     build: ./frontend
+    environment:
+      # Ajusta esto si quieres apuntar a otra URL del backend (prod):
+      VITE_API_BASE_URL: "http://localhost:5001"
     depends_on:
       - backend
     ports:
-      - "80:80"
+      - "3000:80"
+
+  # dynamodb:
+  #   image: amazon/dynamodb-local:latest
+  #   command: -jar DynamoDBLocal.jar -sharedDb
+  #   ports:
+  #     - "8000:8000"
 
 networks:
   default:

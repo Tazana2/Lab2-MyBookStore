@@ -1,20 +1,19 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
 import dotenv from "dotenv";
 dotenv.config();
 
-const config = {
+// Configuración base: región. Credenciales se resuelven automáticamente (Instance Profile en EC2 o perfil local)
+const baseConfig = {
   region: process.env.AWS_REGION || "us-east-1",
 };
 
-// Si es DynamoDB Local, incluir endpoint y credenciales dummy
+// Solo usar endpoint si explícitamente se define (ej. desarrollo con DynamoDB Local)
 if (process.env.DYNAMODB_ENDPOINT) {
-  config.endpoint = process.env.DYNAMODB_ENDPOINT;
-  config.credentials = {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID || "dummy",
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "dummy",
-  };
+  baseConfig.endpoint = process.env.DYNAMODB_ENDPOINT;
 }
 
-const ddbClient = new DynamoDBClient(config);
+const lowLevel = new DynamoDBClient(baseConfig);
+const ddb = DynamoDBDocumentClient.from(lowLevel);
 
-export default ddbClient;
+export default ddb;

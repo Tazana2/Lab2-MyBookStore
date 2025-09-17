@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { DynamoDBClient, CreateTableCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, CreateTableCommand, DescribeTableCommand } from "@aws-sdk/client-dynamodb";
 
 dotenv.config();
 
@@ -9,7 +9,6 @@ const clientConfig = {
   region: process.env.AWS_REGION || "us-east-1",
 };
 
-// Si estás usando DynamoDB Local en dev, define DYNAMODB_ENDPOINT en .env
 if (process.env.DYNAMODB_ENDPOINT) {
   clientConfig.endpoint = process.env.DYNAMODB_ENDPOINT;
 }
@@ -32,18 +31,21 @@ async function createTable() {
   };
 
   try {
+    // Check si existe
+    try {
+      await ddbClient.send(new DescribeTableCommand({ TableName: TABLE_NAME }));
+      console.log(`La tabla '${TABLE_NAME}' ya existe. Nada que hacer.`);
+      process.exit(0);
+    } catch (describeErr) {
+      if (describeErr.name !== "ResourceNotFoundException") throw describeErr;
+    }
+
     console.log(`Creando tabla '${TABLE_NAME}'...`);
-    const command = new CreateTableCommand(params);
-    const result = await ddbClient.send(command);
+    const result = await ddbClient.send(new CreateTableCommand(params));
     console.log("Tabla creada:", result.TableDescription?.TableName);
     console.log("ARN:", result.TableDescription?.TableArn);
     process.exit(0);
   } catch (err) {
-    // Si la tabla ya existe, AWS lanza ResourceInUseException
-    if (err?.name === "ResourceInUseException" || err?.code === "ResourceInUseException") {
-      console.log(`La tabla '${TABLE_NAME}' ya existe. Nada que hacer.`);
-      process.exit(0);
-    }
     console.error("Error creando la tabla:", err);
     process.exit(1);
   }
