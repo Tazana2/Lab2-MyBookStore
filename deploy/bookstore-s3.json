@@ -1,0 +1,446 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Lab2 - Minimal infra with S3 + ASG backend + single ALB + DynamoDB",
+  "Parameters": {
+    "KeyPairName": {
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Description": "SSH KeyPair"
+    },
+    "InstanceType": {
+      "Type": "String",
+      "Default": "t3.micro",
+      "AllowedValues": ["t2.micro", "t3.micro", "t3.small"],
+      "Description": "Instance type for backend servers"
+    },
+    "TableName": {
+      "Type": "String",
+      "Default": "tb_books",
+      "Description": "DynamoDB table name"
+    },
+    "AllowedIP": {
+      "Type": "String",
+      "Default": "0.0.0.0/0",
+      "Description": "Accesible CIDR for SSH (e.g., your IP/32)"
+    },
+    "BackendGitRepo": {
+      "Type": "String",
+      "Default": "https://github.com/Tazana2/Lab2-MyBookStore.git",
+      "Description": "Repo"
+    },
+    "GitBranch": {
+      "Type": "String",
+      "Default": "main",
+      "Description": "Branch to clone"
+    },
+    "BackendApiPort": {
+      "Type": "Number",
+      "Default": 5001,
+      "Description": "API backend Port"
+    },
+    "BackendDesiredCapacity": {
+      "Type": "Number",
+      "Default": 1,
+      "Description": "Desired capacity for backend ASG"
+    },
+    "AWSAccessKeyId": {
+      "Type": "String",
+      "NoEcho": true,
+      "Description": "AWS Access Key ID for DynamoDB access (temporal/simple)"
+    },
+    "AWSSecretAccessKey": {
+      "Type": "String",
+      "NoEcho": true,
+      "Description": "AWS Secret Access Key for DynamoDB access (temporal/simple)"
+    },
+    "AWSSessionToken": {
+      "Type": "String",
+      "NoEcho": true,
+      "Default": "",
+      "Description": "Session token (if using temporary credentials, else empty)"
+    }
+  },
+  "Mappings": {
+    "RegionMap": {
+      "us-east-1": { "AMI": "ami-0fc5d935ebf8bc3bc" },
+      "us-east-2": { "AMI": "ami-0e83be366243f524a" },
+      "us-west-2": { "AMI": "ami-0892d3c7ee96c0bf7" }
+    }
+  },
+  "Resources": {
+    "VPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "172.16.0.0/16",
+        "EnableDnsSupport": true,
+        "EnableDnsHostnames": true,
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "LabVPC-${AWS::StackName}" } }]
+      }
+    },
+    "InternetGateway": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "LabIGW-${AWS::StackName}" } }]
+      }
+    },
+    "VPCGatewayAttachment": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "InternetGatewayId": { "Ref": "InternetGateway" }
+      }
+    },
+    "EIPNatA": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc",
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "EIPNatA-${AWS::StackName}" } }]
+      }
+    },
+    "EIPNatB": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc",
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "EIPNatB-${AWS::StackName}" } }]
+      }
+    },
+    "NatGatewayA": {
+      "Type": "AWS::EC2::NatGateway",
+      "Properties": {
+        "AllocationId": { "Fn::GetAtt": ["EIPNatA", "AllocationId"] },
+        "SubnetId": { "Ref": "PublicSubnetA" },
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "NatGatewayA-${AWS::StackName}" } }]
+      }
+    },
+    "NatGatewayB": {
+      "Type": "AWS::EC2::NatGateway",
+      "Properties": {
+        "AllocationId": { "Fn::GetAtt": ["EIPNatB", "AllocationId"] },
+        "SubnetId": { "Ref": "PublicSubnetB" },
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "NatGatewayB-${AWS::StackName}" } }]
+      }
+    },
+
+    "PublicSubnetA": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "CidrBlock": "172.16.1.0/24",
+        "AvailabilityZone": { "Fn::Select": [ "0", { "Fn::GetAZs": "" } ] },
+        "MapPublicIpOnLaunch": true,
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "PublicSubnetA-${AWS::StackName}" } }]
+      }
+    },
+    "PublicSubnetB": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "CidrBlock": "172.16.2.0/24",
+        "AvailabilityZone": { "Fn::Select": [ "1", { "Fn::GetAZs": "" } ] },
+        "MapPublicIpOnLaunch": true,
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "PublicSubnetB-${AWS::StackName}" } }]
+      }
+    },
+    "PrivateSubnetA": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "CidrBlock": "172.16.3.0/24",
+        "AvailabilityZone": { "Fn::Select": ["0", { "Fn::GetAZs": "" }] },
+        "MapPublicIpOnLaunch": false,
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "PrivateSubnetA-${AWS::StackName}" } }]
+      }
+    },
+    "PrivateSubnetB": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "CidrBlock": "172.16.4.0/24",
+        "AvailabilityZone": { "Fn::Select": ["1", { "Fn::GetAZs": "" }] },
+        "MapPublicIpOnLaunch": false,
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "PrivateSubnetB-${AWS::StackName}" } }]
+      }
+    },
+
+    "PublicRouteTable": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "PublicRouteTable-${AWS::StackName}" } }]
+      }
+    },
+    "DefaultPublicRoute": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "VPCGatewayAttachment",
+      "Properties": {
+        "RouteTableId": { "Ref": "PublicRouteTable" },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": { "Ref": "InternetGateway" }
+      }
+    },
+    "PublicSubnetARouteTableAssoc": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "RouteTableId": { "Ref": "PublicRouteTable" },
+        "SubnetId": { "Ref": "PublicSubnetA" }
+      }
+    },
+    "PublicSubnetBRouteTableAssoc": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "RouteTableId": { "Ref": "PublicRouteTable" },
+        "SubnetId": { "Ref": "PublicSubnetB" }
+      }
+    },
+    "PrivateRouteTableA": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "PrivateRouteTableA-${AWS::StackName}" } }]
+      }
+    },
+    "PrivateRouteTableB": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": { "Ref": "VPC" },
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "PrivateRouteTableB-${AWS::StackName}" } }]
+      }
+    },
+    "PrivateRouteA": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": ["NatGatewayA"],
+      "Properties": {
+        "RouteTableId": { "Ref": "PrivateRouteTableA" },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NatGatewayId": { "Ref": "NatGatewayA" }
+      }
+    },
+    "PrivateRouteB": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": ["NatGatewayB"],
+      "Properties": {
+        "RouteTableId": { "Ref": "PrivateRouteTableB" },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "NatGatewayId": { "Ref": "NatGatewayB" }
+      }
+    },
+    "PrivateSubnetARouteAssoc": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": { "Ref": "PrivateSubnetA" },
+        "RouteTableId": { "Ref": "PrivateRouteTableA" }
+      }
+    },
+    "PrivateSubnetBRouteAssoc": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": { "Ref": "PrivateSubnetB" },
+        "RouteTableId": { "Ref": "PrivateRouteTableB" }
+      }
+    },
+
+    "DynamoDBVPCEndpoint": {
+      "Type": "AWS::EC2::VPCEndpoint",
+      "Properties": {
+        "ServiceName": { "Fn::Sub": "com.amazonaws.${AWS::Region}.dynamodb" },
+        "VpcId": { "Ref": "VPC" },
+        "VpcEndpointType": "Gateway",
+        "RouteTableIds": [{ "Ref": "PrivateRouteTableA" }, { "Ref": "PrivateRouteTableB" }],
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "DynamoDBVPCEndpoint-${AWS::StackName}" } }]
+      }
+    },
+
+    "ALBSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow HTTP to ALB",
+        "VpcId": { "Ref": "VPC" },
+        "SecurityGroupIngress": [
+          { "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "CidrIp": "0.0.0.0/0" },
+          { "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443, "CidrIp": "0.0.0.0/0" },
+          { "IpProtocol": "tcp", "FromPort": 5001, "ToPort": 5001, "CidrIp": "0.0.0.0/0" }
+        ],
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "ALBSecurityGroup-${AWS::StackName}" } }]
+      }
+    },
+
+    "BackendSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow traffic from ALB to backend and SSH from AllowedIP",
+        "VpcId": { "Ref": "VPC" },
+        "SecurityGroupIngress": [
+          { "IpProtocol": "tcp", "FromPort": { "Ref": "BackendApiPort" }, "ToPort": { "Ref": "BackendApiPort" }, "SourceSecurityGroupId": { "Ref": "ALBSecurityGroup" } },
+          { "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22, "CidrIp": { "Ref": "AllowedIP" } }
+        ],
+        "SecurityGroupEgress": [{ "IpProtocol": "-1", "FromPort": 0, "ToPort": 65535, "CidrIp": "0.0.0.0/0" }],
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "BackendSecurityGroup-${AWS::StackName}" } }]
+      }
+    },
+
+    "BooksTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": { "Ref": "TableName" },
+        "AttributeDefinitions": [{ "AttributeName": "id", "AttributeType": "S" }],
+        "KeySchema": [{ "AttributeName": "id", "KeyType": "HASH" }],
+        "BillingMode": "PAY_PER_REQUEST",
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "BooksTable-${AWS::StackName}" } }]
+      }
+    },
+
+    "BackendTargetGroup": {
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties": {
+        "Name": { "Fn::Sub": "BackendTG-${AWS::StackName}" },
+        "VpcId": { "Ref": "VPC" },
+        "TargetType": "instance",
+        "Port": { "Ref": "BackendApiPort" },
+        "Protocol": "HTTP",
+        "HealthCheckPath": "/",
+        "HealthyThresholdCount": 2,
+        "HealthCheckIntervalSeconds": 20,
+        "Matcher": { "HttpCode": "200,300-399" },
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "BackendTG-${AWS::StackName}" } }]
+      }
+    },
+
+    "ALB": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties": {
+        "Name": { "Fn::Sub": "LabALB-${AWS::StackName}" },
+        "Subnets": [{ "Ref": "PublicSubnetA" }, { "Ref": "PublicSubnetB" }],
+        "SecurityGroups": [{ "Ref": "ALBSecurityGroup" }],
+        "Scheme": "internet-facing",
+        "Type": "application",
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "LabALB-${AWS::StackName}" } }]
+      }
+    },
+
+    "ALBListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "LoadBalancerArn": { "Ref": "ALB" },
+        "Port": 80,
+        "Protocol": "HTTP",
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": { "Ref": "BackendTargetGroup" }
+          }
+        ]
+      }
+    },
+
+    "BackendLaunchConfig": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "ImageId": { "Fn::FindInMap": ["RegionMap", { "Ref": "AWS::Region" }, "AMI"] },
+        "InstanceType": { "Ref": "InstanceType" },
+        "KeyName": { "Ref": "KeyPairName" },
+        "SecurityGroups": [{ "Ref": "BackendSecurityGroup" }],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Sub": "#!/bin/bash -xe\napt-get update -y\napt-get install -y git docker.io\nsystemctl enable docker\ncd /home/ubuntu || cd /root\nrm -rf app || true\nmkdir -p app && cd app\nGIT_SSL_NO_VERIFY=1 git clone -b ${GitBranch} ${BackendGitRepo} repo || true\ncd repo/backend || true\n/usr/bin/docker build -t bookstore-backend . || true\nEXTRA_ENV=''\nif [ ! -z '${AWSSessionToken}' ]; then EXTRA_ENV='-e AWS_SESSION_TOKEN=${AWSSessionToken}'; fi\n/usr/bin/docker run -d --restart unless-stopped -p ${BackendApiPort}:${BackendApiPort} -e PORT=${BackendApiPort} -e AWS_REGION=${AWS::Region} -e TABLE_NAME=${TableName} -e AWS_ACCESS_KEY_ID=${AWSAccessKeyId} -e AWS_SECRET_ACCESS_KEY=${AWSSecretAccessKey} $EXTRA_ENV --name backend bookstore-backend || true\nsleep 8\n/usr/bin/docker run --rm -e AWS_REGION=${AWS::Region} -e TABLE_NAME=${TableName} -e AWS_ACCESS_KEY_ID=${AWSAccessKeyId} -e AWS_SECRET_ACCESS_KEY=${AWSSecretAccessKey} $EXTRA_ENV bookstore-backend node scripts/seed.js >> /var/log/seed.log 2>&1 || true\n"
+          }
+        }
+      }
+    },
+
+    "BackendASG": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AutoScalingGroupName": { "Fn::Sub": "BackendASG-${AWS::StackName}" },
+        "LaunchConfigurationName": { "Ref": "BackendLaunchConfig" },
+        "MinSize": "1",
+        "MaxSize": "2",
+        "DesiredCapacity": { "Ref": "BackendDesiredCapacity" },
+        "VPCZoneIdentifier": [{ "Ref": "PrivateSubnetA" }, { "Ref": "PrivateSubnetB" }],
+        "TargetGroupARNs": [{ "Ref": "BackendTargetGroup" }],
+        "HealthCheckType": "ELB",
+        "HealthCheckGracePeriod": 120,
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "BackendInstance-${AWS::StackName}" }, "PropagateAtLaunch": true }]
+      }
+    },
+
+    "StaticSiteBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": { "Fn::Sub": "static-site-bucket-${AWS::StackName}-${AWS::Region}" },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": false,
+          "IgnorePublicAcls": false,
+          "BlockPublicPolicy": false,
+          "RestrictPublicBuckets": false
+        },
+        "WebsiteConfiguration": {
+          "IndexDocument": "index.html",
+          "ErrorDocument": "index.html"
+        },
+        "CorsConfiguration": {
+          "CorsRules": [
+            {
+              "AllowedOrigins": ["*"],
+              "AllowedMethods": ["GET", "HEAD", "POST"],
+              "MaxAge": 3000,
+              "AllowedHeaders": ["*"]
+            }
+          ]
+        },
+        "Tags": [{ "Key": "Name", "Value": { "Fn::Sub": "StaticSiteBucket-${AWS::StackName}" } }]
+      }
+    },
+
+    "StaticSiteBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": { "Ref": "StaticSiteBucket" },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "PublicReadGetObject",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "s3:GetObject",
+              "Resource": { "Fn::Sub": "arn:aws:s3:::${StaticSiteBucket}/*" }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "VPCId": {
+      "Description": "VPC ID",
+      "Value": { "Ref": "VPC" }
+    },
+    "PublicSubnetA": {
+      "Description": "Public Subnet A",
+      "Value": { "Ref": "PublicSubnetA" }
+    },
+    "PublicSubnetB": {
+      "Description": "Public Subnet B",
+      "Value": { "Ref": "PublicSubnetB" }
+    },
+    "ALBDNSName": {
+      "Description": "DNS Name of the ALB",
+      "Value": { "Fn::GetAtt": ["ALB", "DNSName"] }
+    },
+    "BackendASGName": {
+      "Description": "Backend ASG name",
+      "Value": { "Ref": "BackendASG" }
+    },
+    "BooksTableName": {
+      "Description": "DynamoDB table name",
+      "Value": { "Ref": "TableName" }
+    },
+    "StaticSiteBucketName": {
+      "Description": "S3 Bucket for static site",
+      "Value": { "Ref": "StaticSiteBucket" }
+    },
+    "StaticSiteWebsiteURL": {
+      "Description": "Website URL for static site",
+      "Value": { "Fn::Sub": "http://${StaticSiteBucket}.s3-website-${AWS::Region}.amazonaws.com" }
+    }
+  }
+}
